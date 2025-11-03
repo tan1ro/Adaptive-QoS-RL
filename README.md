@@ -263,11 +263,22 @@ To use with physical switches:
 
 ## Troubleshooting
 
+### ImportError: cannot import name 'ALREADY_HANDLED' from 'eventlet.wsgi'
+
+This error occurs when using Ryu 4.34 with newer versions of eventlet (0.40+). A fix script is provided:
+
+```bash
+./fix_ryu_eventlet.sh
+```
+
+Or manually patch by editing the installed `ryu/app/wsgi.py` file in your virtual environment, replacing the `ALREADY_HANDLED` import with a try/except block that falls back to an empty byte string.
+
 ### Controller Not Starting
 
 - Ensure Ryu is properly installed: `ryu-manager --version`
 - Check for port conflicts (6653 for OpenFlow, 8080 for REST API)
 - Verify Python dependencies are installed
+- If you see eventlet import errors, run `./fix_ryu_eventlet.sh`
 
 ### Agent Not Connecting to Controller
 

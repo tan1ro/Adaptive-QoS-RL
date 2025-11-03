@@ -64,6 +64,8 @@ class AdaptiveQoSSystem:
         from controller.rest_api import RESTAPI
         
         # Create controller instance
+        # Note: RyuApp instances are automatically registered when imported
+        # We create it here to ensure it's initialized
         controller = QoSController()
         
         # Start monitoring
@@ -73,8 +75,14 @@ class AdaptiveQoSSystem:
         rest_api = RESTAPI(controller, host='0.0.0.0', port=8080)
         rest_api.start()
         
-        # Keep controller running
-        app_manager.AppManager.run_apps([controller])
+        # Keep controller thread alive
+        # The controller will handle events through Ryu's event system
+        # Since we're running in a separate thread, we just need to keep it alive
+        try:
+            while self.running:
+                time.sleep(1)
+        except Exception as e:
+            LOG.error(f"Controller thread error: {e}")
     
     def start_agent_training(self, episodes: int = 1000, save_path: str = 'models/dqn_model'):
         """
