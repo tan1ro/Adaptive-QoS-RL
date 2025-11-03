@@ -146,15 +146,30 @@ Evaluate a trained model:
 python main.py --mode evaluation --episodes 10
 ```
 
-### 3. Monitor Logs
+### 3. Access the Web Dashboard
 
-The system provides real-time logs showing:
+Open your web browser and navigate to:
+```
+http://localhost:8080
+```
+
+The dashboard provides real-time visualization of:
+- **Training Progress**: Episode count, rewards, epsilon decay, loss
+- **Network State**: Link utilization, queue lengths, delays, packet loss
+- **Flow Statistics**: Detailed flow statistics from switches
+- **Interactive Charts**: Real-time graphs of training rewards and network metrics
+
+The dashboard updates automatically every second while training is running.
+
+### 4. Monitor Logs (Alternative)
+
+If you prefer command-line logs, the system provides real-time logs showing:
 - Network state updates
 - QoS actions applied
 - Training progress (episode rewards, epsilon decay)
 - Controller statistics
 
-### 4. Generate Traffic (optional)
+### 5. Generate Traffic (optional)
 
 In Mininet, generate traffic to test the adaptive QoS:
 
@@ -304,7 +319,7 @@ Or manually patch by editing the installed `ryu/app/wsgi.py` file in your virtua
 
 - [ ] Multi-switch topology support
 - [ ] PPO implementation completion
-- [ ] Visualization dashboard for real-time metrics
+- [x] Visualization dashboard for real-time metrics ✓
 - [ ] Distributed training for multiple network domains
 - [ ] Transfer learning for different network topologies
 - [ ] Integration with SDN controllers (ONOS, OpenDaylight)

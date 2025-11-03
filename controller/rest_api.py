@@ -2,9 +2,10 @@
 REST API for communication between Ryu controller and RL agent
 """
 
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 import threading
 import logging
+import os
 
 LOG = logging.getLogger(__name__)
 
@@ -26,7 +27,20 @@ class RESTAPI:
         self.controller = controller
         self.host = host
         self.port = port
-        self.app = Flask(__name__)
+        self.app = Flask(__name__, 
+                        static_folder='../frontend',
+                        static_url_path='')
+        # Training metrics storage
+        self.training_metrics = {
+            'episode': 0,
+            'total_episodes': 0,
+            'current_reward': 0,
+            'average_reward': 0,
+            'epsilon': 1.0,
+            'loss': 0.0,
+            'scores': [],
+            'is_training': False
+        }
         if HAS_CORS:
             CORS(self.app)  # Enable CORS for agent requests
         else:
@@ -116,6 +130,49 @@ class RESTAPI:
                 'status': 'healthy',
                 'controller': 'running'
             }), 200
+
+        @self.app.route('/api/v1/training/metrics', methods=['GET'])
+        def get_training_metrics():
+            """Get training metrics"""
+            return jsonify({
+                'success': True,
+                'metrics': self.training_metrics
+            }), 200
+
+        @self.app.route('/api/v1/training/metrics', methods=['POST'])
+        def update_training_metrics():
+            """Update training metrics"""
+            try:
+                data = request.get_json()
+                self.training_metrics.update(data)
+                return jsonify({
+                    'success': True,
+                    'message': 'Metrics updated'
+                }), 200
+            except Exception as e:
+                LOG.error(f"Error updating metrics: {e}")
+                return jsonify({
+                    'success': False,
+                    'error': str(e)
+                }), 500
+
+        # Serve frontend
+        frontend_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'frontend')
+        
+        @self.app.route('/')
+        def index():
+            """Serve main dashboard"""
+            return send_from_directory(frontend_path, 'index.html')
+
+        @self.app.route('/css/<path:filename>')
+        def serve_css(filename):
+            """Serve CSS files"""
+            return send_from_directory(os.path.join(frontend_path, 'css'), filename)
+
+        @self.app.route('/js/<path:filename>')
+        def serve_js(filename):
+            """Serve JavaScript files"""
+            return send_from_directory(os.path.join(frontend_path, 'js'), filename)
 
     def start(self):
         """

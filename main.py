@@ -149,10 +149,21 @@ class AdaptiveQoSSystem:
         
         # Training loop
         scores = []
+        import requests
+        
+        # Update training status
+        try:
+            requests.post('http://localhost:8080/api/v1/training/metrics', 
+                         json={'is_training': True, 'total_episodes': episodes})
+        except:
+            pass
+        
         for episode in range(episodes):
             state = env.reset()
             total_reward = 0
             steps = 0
+            episode_loss = 0.0
+            loss_count = 0
             
             while True:
                 # Agent chooses action
@@ -166,6 +177,9 @@ class AdaptiveQoSSystem:
                 
                 # Train agent
                 loss = agent.replay()
+                if loss is not None:
+                    episode_loss += loss
+                    loss_count += 1
                 
                 state = next_state
                 total_reward += reward
@@ -176,6 +190,21 @@ class AdaptiveQoSSystem:
             
             scores.append(total_reward)
             avg_score = np.mean(scores[-100:]) if len(scores) >= 100 else np.mean(scores)
+            avg_loss = episode_loss / loss_count if loss_count > 0 else 0.0
+            
+            # Update metrics via API
+            try:
+                requests.post('http://localhost:8080/api/v1/training/metrics',
+                            json={
+                                'episode': episode + 1,
+                                'current_reward': float(total_reward),
+                                'average_reward': float(avg_score),
+                                'epsilon': float(agent.epsilon),
+                                'loss': float(avg_loss),
+                                'scores': [float(s) for s in scores[-100:]]  # Last 100 scores
+                            })
+            except:
+                pass
             
             LOG.info(f"Episode {episode+1}/{episodes} - "
                     f"Score: {total_reward:.2f}, "
@@ -187,6 +216,13 @@ class AdaptiveQoSSystem:
             if (episode + 1) % 100 == 0:
                 agent.save(f"{save_path}_ep{episode+1}.h5")
                 LOG.info(f"Model saved at episode {episode+1}")
+        
+        # Update training status to complete
+        try:
+            requests.post('http://localhost:8080/api/v1/training/metrics',
+                         json={'is_training': False})
+        except:
+            pass
         
         # Save final model
         agent.save(f"{save_path}_final.h5")

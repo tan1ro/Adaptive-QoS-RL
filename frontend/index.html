@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adaptive QoS RL Dashboard</title>
+    <link rel="stylesheet" href="css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <h1>🌐 Adaptive QoS RL Dashboard</h1>
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <div class="main-content">
+            <!-- Training Metrics Section -->
+            <section class="card training-card">
+                <h2>Training Progress</h2>
+                <div class="metrics-grid">
+                    <div class="metric-item">
+                        <label>Episode</label>
+                        <div class="metric-value">
+                            <span id="currentEpisode">0</span> / <span id="totalEpisodes">0</span>
+                        </div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="episodeProgress"></div>
+                        </div>
+                    </div>
+                    <div class="metric-item">
+                        <label>Current Reward</label>
+                        <div class="metric-value" id="currentReward">0.00</div>
+                    </div>
+                    <div class="metric-item">
+                        <label>Average Reward</label>
+                        <div class="metric-value" id="averageReward">0.00</div>
+                    </div>
+                    <div class="metric-item">
+                        <label>Epsilon (Exploration)</label>
+                        <div class="metric-value" id="epsilon">1.000</div>
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="epsilonProgress"></div>
+                        </div>
+                    </div>
+                    <div class="metric-item">
+                        <label>Loss</label>
+                        <div class="metric-value" id="loss">0.000</div>
+                    </div>
+                    <div class="metric-item">
+                        <label>Status</label>
+                        <div class="metric-value" id="trainingStatus">Idle</div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="rewardChart"></canvas>
+                </div>
+            </section>
+
+            <!-- Network State Section -->
+            <section class="card network-card">
+                <h2>Network State</h2>
+                <div class="network-metrics">
+                    <div class="metric-box">
+                        <h3>Link Utilization</h3>
+                        <div class="metric-grid">
+                            <div class="metric-cell" id="linkUtil"></div>
+                        </div>
+                    </div>
+                    <div class="metric-box">
+                        <h3>Queue Length</h3>
+                        <div class="metric-grid" id="queueLength"></div>
+                    </div>
+                    <div class="metric-box">
+                        <h3>Delay</h3>
+                        <div class="metric-grid" id="delay"></div>
+                    </div>
+                    <div class="metric-box">
+                        <h3>Packet Loss</h3>
+                        <div class="metric-grid" id="packetLoss"></div>
+                    </div>
+                </div>
+                <div class="chart-container">
+                    <canvas id="networkChart"></canvas>
+                </div>
+            </section>
+
+            <!-- Flow Statistics Section -->
+            <section class="card stats-card">
+                <h2>Flow Statistics</h2>
+                <div class="table-container">
+                    <table id="statsTable">
+                        <thead>
+                            <tr>
+                                <th>DPID</th>
+                                <th>Port</th>
+                                <th>Packets</th>
+                                <th>Bytes</th>
+                                <th>Duration</th>
+                            </tr>
+                        </thead>
+                        <tbody id="statsTableBody">
+                            <tr><td colspan="5">No statistics available</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+    </div>
+
+    <script src="js/dashboard.js"></script>
+</body>
+</html>
+
