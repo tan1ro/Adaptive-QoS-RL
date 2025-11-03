@@ -4,6 +4,12 @@
 echo "Starting Adaptive QoS using Reinforcement Learning..."
 echo ""
 
+# Activate virtual environment if it exists
+if [ -d "venv" ]; then
+    echo "Activating virtual environment..."
+    source venv/bin/activate
+fi
+
 # Check if running as root (needed for Mininet)
 if [ "$EUID" -ne 0 ]; then 
     echo "Please run as root (sudo) for Mininet"

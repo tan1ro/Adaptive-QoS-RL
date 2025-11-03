@@ -60,12 +60,27 @@ adaptive-qos-rl/
    ```
 
 2. **Install Python dependencies:**
+   
+   First, create and activate a virtual environment (required for modern Linux systems):
    ```bash
+   python3 -m venv venv
+   source venv/bin/activate
    pip install -r requirements.txt
+   ```
+   
+   Or use the provided setup script:
+   ```bash
+   chmod +x setup.sh
+   ./setup.sh
+   source venv/bin/activate
    ```
 
 3. **Install Ryu SDN Controller:**
+   
+   Note: Ryu is already included in `requirements.txt` and will be installed automatically. If you need to install it separately:
    ```bash
+   # Make sure virtual environment is activated first
+   source venv/bin/activate
    pip install ryu
    # Or from source: git clone https://github.com/faucetsdn/ryu.git
    ```
@@ -82,7 +97,11 @@ adaptive-qos-rl/
    ```
 
 5. **Install TensorFlow:**
+   
+   Note: TensorFlow is already included in `requirements.txt` and will be installed automatically. If you need to install it separately:
    ```bash
+   # Make sure virtual environment is activated first
+   source venv/bin/activate
    pip install tensorflow==2.15.0
    ```
 
@@ -95,6 +114,11 @@ Edit `config/qos_config.yaml` to configure:
 - Topology settings
 
 ## Usage
+
+**Important:** Make sure to activate the virtual environment before running any Python commands:
+```bash
+source venv/bin/activate
+```
 
 ### 1. Start Mininet Network (in one terminal)
 

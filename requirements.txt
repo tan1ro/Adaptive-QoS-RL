@@ -1,10 +1,10 @@
 # Core dependencies
 ryu==4.34
-tensorflow==2.15.0
-numpy==1.24.3
+tensorflow>=2.16.0  # Updated for Python 3.12 compatibility (2.15.0 not available)
+numpy>=1.24.3  # Updated for Python 3.12 compatibility
 gym==0.26.2
-pyyaml==6.0.1
-requests==2.31.0
+pyyaml>=6.0.1  # Already installed via ryu dependencies
+requests>=2.31.0  # Already installed via ryu dependencies
 
 # Optional: Stable-Baselines3 for convenience
 stable-baselines3==2.1.0
@@ -14,7 +14,7 @@ pytest==7.4.3
 pytest-cov==4.1.0
 
 # Network emulation
-mininet==2.3.0
+mininet>=2.3.0.dev6  # Updated for Python 3.12 compatibility (2.3.0 stable not available)
 
 # Utilities
 flask==3.0.0
