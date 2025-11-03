@@ -1,0 +1,23 @@
+# Core dependencies
+ryu==4.34
+tensorflow==2.15.0
+numpy==1.24.3
+gym==0.26.2
+pyyaml==6.0.1
+requests==2.31.0
+
+# Optional: Stable-Baselines3 for convenience
+stable-baselines3==2.1.0
+
+# Testing
+pytest==7.4.3
+pytest-cov==4.1.0
+
+# Network emulation
+mininet==2.3.0
+
+# Utilities
+flask==3.0.0
+flask-cors==4.0.0
+werkzeug==3.0.1
+

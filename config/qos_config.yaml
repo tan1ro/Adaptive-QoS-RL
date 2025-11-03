@@ -1,0 +1,41 @@
+# QoS Configuration
+qos:
+  # Queue priorities (0 = highest, 7 = lowest)
+  queues:
+    - priority: 0
+      min_rate: 10000  # 10 Mbps minimum
+      max_rate: 100000  # 100 Mbps maximum
+      name: "high_priority"
+    - priority: 1
+      min_rate: 5000   # 5 Mbps minimum
+      max_rate: 50000  # 50 Mbps maximum
+      name: "medium_priority"
+    - priority: 2
+      min_rate: 1000   # 1 Mbps minimum
+      max_rate: 10000  # 10 Mbps maximum
+      name: "low_priority"
+
+  # Thresholds for state observation
+  thresholds:
+    link_utilization_warning: 0.7  # 70%
+    link_utilization_critical: 0.9  # 90%
+    queue_length_warning: 1000
+    queue_length_critical: 5000
+    delay_warning_ms: 50
+    delay_critical_ms: 100
+    packet_loss_warning: 0.01  # 1%
+    packet_loss_critical: 0.05  # 5%
+
+  # RL parameters
+  rl:
+    state_update_interval: 2.0  # seconds
+    action_update_interval: 5.0  # seconds
+    reward_alpha: 0.5  # weight for throughput in reward function
+
+  # Network topology
+  topology:
+    switch_count: 1
+    host_count: 4
+
+
+
