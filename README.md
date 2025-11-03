@@ -130,6 +130,48 @@ This creates a simple linear topology with 3 switches and connects to the Ryu co
 
 ### 2. Run the Complete System
 
+#### Quick Start (Recommended)
+
+**Single command to run everything:**
+```bash
+sudo ./start_demo.sh [episodes]
+```
+
+This script automatically:
+- Checks dependencies
+- Activates virtual environment
+- Starts Mininet network emulation
+- Starts Ryu controller
+- Starts REST API server
+- Starts RL agent training
+- Cleans up on exit
+
+Example:
+```bash
+# Run with 100 episodes (default)
+sudo ./start_demo.sh
+
+# Run with 500 episodes
+sudo ./start_demo.sh 500
+```
+
+Then open your browser to: **http://localhost:8080**
+
+#### Manual Start (Alternative)
+
+If you prefer to start components manually:
+
+**Step 1: Start Mininet (in separate terminal)**
+```bash
+sudo mn --controller=remote,ip=127.0.0.1,port=6653 --topo=linear,3
+```
+
+**Step 2: Start the system**
+```bash
+source venv/bin/activate
+python main.py --mode training --episodes 1000
+```
+
 #### Training Mode
 
 Train the RL agent to learn optimal QoS policies:
