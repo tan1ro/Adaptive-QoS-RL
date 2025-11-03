@@ -63,10 +63,27 @@ class AdaptiveQoSSystem:
         from controller.qos_controller import QoSController
         from controller.rest_api import RESTAPI
         
-        # Create controller instance
-        # Note: RyuApp instances are automatically registered when imported
-        # We create it here to ensure it's initialized
-        controller = QoSController()
+        # Get the controller instance from app_manager after it's registered
+        # First ensure the module is imported so RyuApp is registered
+        import controller.qos_controller
+        
+        # Start REST API - we'll get the controller instance from app_manager
+        # Note: We need to wait for app_manager to initialize the app
+        rest_api = None
+        
+        # Initialize app_manager with our app
+        # Use the app name (module path) instead of instance
+        apps = ['controller.qos_controller']
+        
+        # Start app_manager in a way that allows us to access the controller instance
+        app_mgr = app_manager.AppManager()
+        
+        # Load and instantiate the app
+        app_mgr.load_apps(apps)
+        app_mgr.instantiate_apps(contexts=None, log_early=False)
+        
+        # Get the controller instance from applications dict
+        controller = app_mgr.applications['QoSController']
         
         # Start monitoring
         controller.start_monitoring()
@@ -77,7 +94,6 @@ class AdaptiveQoSSystem:
         
         # Keep controller thread alive
         # The controller will handle events through Ryu's event system
-        # Since we're running in a separate thread, we just need to keep it alive
         try:
             while self.running:
                 time.sleep(1)
