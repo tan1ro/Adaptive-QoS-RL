@@ -9,8 +9,16 @@ This file orchestrates the entire system:
 - Provides real-time metrics updates to the web dashboard
 """
 
+# Set TensorFlow environment variables early to prevent CUDA compilation errors
+# These settings disable XLA GPU compilation which requires CUDA toolkit
+import os
+os.environ['TF_XLA_FLAGS'] = '--tf_xla_cpu_global_jit'
+os.environ['XLA_FLAGS'] = '--xla_gpu_unsafe_fallback_to_driver_on_ptxas_not_found'
+# Alternative: Uncomment next line to force CPU-only mode if GPU issues persist
+# os.environ['CUDA_VISIBLE_DEVICES'] = ''
+
 # Standard library imports for system operations
-import os          # File and directory operations
+# Note: os is already imported above for environment variables
 import sys         # System-specific parameters and functions
 import subprocess  # Spawning processes (not used but available)
 import threading   # Thread management for concurrent operations
@@ -56,7 +64,8 @@ class AdaptiveQoSSystem:
         self.config = self._load_config(config_path)
         
         # Store references for process/thread management
-        self.controller_process = None  # Not used currently but available for future
+        self.controller_process = None  # Ryu controller subprocess (if using ryu-manager)
+        self.controller_app_mgr = None   # AppManager instance for controller
         self.agent_thread = None        # Thread reference for agent execution
         self.running = False            # Flag to control system lifecycle
         
@@ -84,6 +93,103 @@ class AdaptiveQoSSystem:
             LOG.error(f"Failed to load config: {e}")
             return {}  # Return empty dict as fallback
     
+    def _check_and_free_port(self, port: int):
+        """
+        Check if a port is in use and free it if necessary
+        
+        Args:
+            port: Port number to check (e.g., 6653 for OpenFlow)
+        """
+        import socket
+        import subprocess
+        
+        # First check if port is actually in use by trying to bind to it
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            sock.bind(('0.0.0.0', port))
+            sock.close()
+            # Port is free, no action needed
+            return
+        except OSError:
+            # Port is in use
+            sock.close()
+            LOG.warning(f"Port {port} is already in use. Attempting to free it...")
+            
+            # Try to find and kill the process using the port
+            try:
+                # Try using lsof first (more reliable on Linux)
+                result = subprocess.run(
+                    ['lsof', '-ti', f':{port}'],
+                    capture_output=True,
+                    text=True,
+                    timeout=5
+                )
+                if result.returncode == 0 and result.stdout.strip():
+                    pids = result.stdout.strip().split('\n')
+                    for pid in pids:
+                        if pid.strip():
+                            try:
+                                pid_int = int(pid.strip())
+                                LOG.info(f"Killing process {pid_int} using port {port}...")
+                                os.kill(pid_int, signal.SIGTERM)
+                                time.sleep(1)  # Give process time to die
+                                # Check if still running, force kill if needed
+                                try:
+                                    os.kill(pid_int, 0)  # Check if process exists
+                                    LOG.warning(f"Process {pid_int} still running, sending SIGKILL...")
+                                    os.kill(pid_int, signal.SIGKILL)
+                                    time.sleep(0.5)
+                                except ProcessLookupError:
+                                    pass  # Process already dead
+                            except (ValueError, ProcessLookupError, PermissionError) as e:
+                                LOG.debug(f"Could not kill process {pid}: {e}")
+                    
+                    # Wait a bit for port to be freed
+                    time.sleep(2)
+                    
+                    # Verify port is now free
+                    sock2 = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    sock2.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                    try:
+                        sock2.bind(('0.0.0.0', port))
+                        sock2.close()
+                        LOG.info(f"Port {port} is now free")
+                        return
+                    except OSError:
+                        sock2.close()
+                        LOG.warning(f"Port {port} is still in use after cleanup attempt")
+            except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
+                # lsof not available or failed, try alternative methods
+                try:
+                    # Try using fuser (alternative method)
+                    result = subprocess.run(
+                        ['fuser', '-k', f'{port}/tcp'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    if result.returncode == 0:
+                        LOG.info(f"Freed port {port} using fuser")
+                        time.sleep(2)
+                        return
+                except (FileNotFoundError, subprocess.SubprocessError):
+                    pass
+                
+                # Last resort: try to kill any Python processes that might be Ryu controllers
+                LOG.warning("Could not use lsof/fuser. Trying to kill potential Ryu controller processes...")
+                try:
+                    result = subprocess.run(
+                        ['pkill', '-f', 'ryu-manager|run_apps|qos_controller'],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    time.sleep(2)
+                    LOG.info("Attempted to kill potential Ryu controller processes")
+                except subprocess.SubprocessError:
+                    pass
+    
     def start_controller(self):
         """
         Start Ryu SDN Controller and REST API server
@@ -96,6 +202,10 @@ class AdaptiveQoSSystem:
         5. Keeps the controller thread alive to handle OpenFlow events
         """
         LOG.info("Starting Ryu controller...")
+        
+        # Check and free port 6653 if it's already in use
+        # This prevents "Address already in use" errors from previous runs
+        self._check_and_free_port(6653)
         
         # Import Ryu framework components
         from ryu import cfg               # Configuration system
@@ -113,42 +223,288 @@ class AdaptiveQoSSystem:
         
         # Create AppManager instance - manages Ryu applications
         app_mgr = app_manager.AppManager()
+        self.controller_app_mgr = app_mgr  # Store reference
         
-        # Load application modules - discovers and imports the apps
-        app_mgr.load_apps(apps)
+        # CRITICAL: Start the OpenFlow controller server using run_apps()
+        # run_apps() will:
+        # 1. Load the apps
+        # 2. Instantiate them  
+        # 3. Start the OpenFlow server on port 6653
+        # It blocks, so we run it in a background thread
+        LOG.info("Starting OpenFlow controller server on port 6653...")
         
-        # Instantiate applications - creates instances of each app class
-        # contexts=None: use default contexts
-        # log_early=False: don't log before full initialization
-        app_mgr.instantiate_apps(contexts=None, log_early=False)
+        # Controller instance will be available after run_apps() instantiates apps
+        # Use threading.Event to signal when controller is ready
+        controller_ref = {'instance': None}
+        controller_ready_event = threading.Event()
         
-        # Get the instantiated controller instance
-        # 'QoSController' is the class name registered by RyuApp decorator
-        controller = app_mgr.applications['QoSController']
+        def run_controller_server():
+            """
+            Run controller server in background thread
+            run_apps() loads, instantiates, AND starts the OpenFlow server
+            This blocks, so it runs in a separate thread
+            """
+            # Poll for controller instance while run_apps() is starting up
+            # run_apps() instantiates apps before blocking on the server loop
+            def poll_for_controller():
+                """Poll for controller instance and set it in controller_ref"""
+                from controller.qos_controller import QoSController as QC
+                import time as time_module
+                
+                for attempt in range(10):  # Check 10 times over ~2 seconds
+                    try:
+                        # Check SERVICE_BRICKS first (most reliable)
+                        if hasattr(app_manager, 'SERVICE_BRICKS'):
+                            if QC in app_manager.SERVICE_BRICKS:
+                                controller_ref['instance'] = app_manager.SERVICE_BRICKS[QC]
+                                LOG.info("Controller instance stored from SERVICE_BRICKS in thread")
+                                controller_ready_event.set()
+                                return True
+                            # Search through all services
+                            for svc_class, svc_inst in app_manager.SERVICE_BRICKS.items():
+                                if isinstance(svc_inst, QC):
+                                    controller_ref['instance'] = svc_inst
+                                    LOG.info(f"Controller instance found in SERVICE_BRICKS: {svc_class.__name__}")
+                                    controller_ready_event.set()
+                                    return True
+                        
+                        # Fallback to applications dict
+                        possible_keys = ['controller.qos_controller', 'QoSController', 'qos_controller']
+                        for key in possible_keys:
+                            if key in app_mgr.applications:
+                                controller_ref['instance'] = app_mgr.applications[key]
+                                LOG.info(f"Controller instance stored from applications dict in thread: {key}")
+                                controller_ready_event.set()
+                                return True
+                        
+                        # Search by type
+                        for key, app_inst in app_mgr.applications.items():
+                            if isinstance(app_inst, QC):
+                                controller_ref['instance'] = app_inst
+                                LOG.info(f"Controller instance stored by type in thread: {key}")
+                                controller_ready_event.set()
+                                return True
+                    except Exception as e:
+                        LOG.debug(f"Poll attempt {attempt+1} failed: {e}")
+                    
+                    time_module.sleep(0.2)  # Wait 200ms between attempts
+                
+                return False
+            
+            try:
+                # run_apps() does everything: loads, instantiates, and starts OpenFlow server
+                # The OpenFlow server will listen on port 6653 for switch connections
+                LOG.info("Starting run_apps() - this will load apps and start OpenFlow server...")
+                
+                # Start polling in a separate thread within this thread context
+                import threading
+                poll_thread = threading.Thread(target=poll_for_controller, daemon=True)
+                poll_thread.start()
+                
+                # Start run_apps (this blocks)
+                app_mgr.run_apps(apps)
+                
+                LOG.info("run_apps() completed (this shouldn't normally happen unless server stops)")
+            except Exception as e:
+                LOG.error(f"Controller server error: {e}", exc_info=True)
+                import traceback
+                LOG.error(traceback.format_exc())
+        
+        # Start controller server in background daemon thread
+        # Daemon thread will terminate when main program exits
+        controller_server_thread = threading.Thread(target=run_controller_server, daemon=True)
+        controller_server_thread.start()
+        LOG.info("OpenFlow controller server thread started")
+        
+        # Give the thread a moment to start executing
+        # This prevents race condition where we check before run_apps() begins
+        time.sleep(2)  # Increased to 2 seconds to give run_apps() time to start
+        
+        # Wait for apps to be instantiated by run_apps() in the background thread
+        # CRITICAL: When run_apps() runs in a thread, the apps may be stored in a 
+        # thread-local context. We need to use Ryu's service registry or get the instance
+        # through a different mechanism.
+        LOG.info("Waiting for controller apps to initialize...")
+        max_wait = 30
+        controller_key = None
+        
+        # Import QoSController class for type checking and service lookup
+        from controller.qos_controller import QoSController as QoSControllerClass
+        
+        # Wait for controller instance to be set by the background thread OR find it ourselves
+        # The thread will try to set it, but we also poll as backup
+        for i in range(max_wait):
+            # First check if the thread found it and set it in controller_ref
+            if controller_ref['instance'] is not None:
+                LOG.info("Controller instance obtained from background thread")
+                break
+            
+            # Method 1: Try Ryu's SERVICE_BRICKS registry (most reliable)
+            if controller_ref['instance'] is None:
+                try:
+                    # Ryu stores app instances in SERVICE_BRICKS
+                    if hasattr(app_manager, 'SERVICE_BRICKS'):
+                        service_bricks = app_manager.SERVICE_BRICKS
+                        # Try to get QoSController from service registry
+                        if QoSControllerClass in service_bricks:
+                            controller_ref['instance'] = service_bricks[QoSControllerClass]
+                            LOG.info("Controller instance obtained via SERVICE_BRICKS registry")
+                            break
+                        # Or search through all services
+                        for service_class, service_instance in service_bricks.items():
+                            if isinstance(service_instance, QoSControllerClass):
+                                controller_ref['instance'] = service_instance
+                                LOG.info(f"Controller instance found in SERVICE_BRICKS: {service_class.__name__}")
+                                break
+                        if controller_ref['instance'] is not None:
+                            break
+                except Exception as e:
+                    LOG.debug(f"SERVICE_BRICKS lookup failed: {e}")
+            
+            # Method 2: Check instance's applications dict
+            if controller_ref['instance'] is None:
+                possible_keys = ['controller.qos_controller', 'QoSController', 'qos_controller']
+                for key in possible_keys:
+                    if key in app_mgr.applications:
+                        controller_ref['instance'] = app_mgr.applications[key]
+                        controller_key = key
+                        LOG.info(f"Controller instance obtained with key: {key}")
+                        break
+            
+            # Method 3: Search by type if any apps are loaded
+            if controller_ref['instance'] is None and len(app_mgr.applications) > 0:
+                for key, app_instance in app_mgr.applications.items():
+                    if isinstance(app_instance, QoSControllerClass):
+                        controller_ref['instance'] = app_instance
+                        controller_key = key
+                        LOG.info(f"Controller instance found by type with key: {key}")
+                        break
+            
+            if controller_ref['instance'] is not None:
+                break
+            
+            # Debug: log what's available (every 5 seconds)
+            if i > 0 and i % 5 == 0:
+                instance_keys = list(app_mgr.applications.keys())
+                try:
+                    service_keys = [k.__name__ for k in app_manager.SERVICE_BRICKS.keys()] if hasattr(app_manager, 'SERVICE_BRICKS') else []
+                except:
+                    service_keys = []
+                
+                if instance_keys:
+                    LOG.info(f"Instance dict keys: {instance_keys}")
+                if service_keys:
+                    LOG.info(f"SERVICE_BRICKS keys: {service_keys}")
+                if not instance_keys and not service_keys:
+                    LOG.debug(f"No apps loaded yet ({i}/{max_wait} seconds) - thread may still be starting run_apps()")
+            
+            time.sleep(1)
+        
+        if controller_ref['instance'] is None:
+            # Log what's actually available for debugging
+            LOG.error(f"Failed to get controller instance after {max_wait} seconds")
+            LOG.error("Attempted methods:")
+            LOG.error("  1. app_mgr.applications dict")
+            LOG.error("  2. app_manager.applications (module-level)")
+            LOG.error("  3. app_manager.get_instance()")
+            LOG.error("  4. Type-based search")
+            
+            instance_keys = list(app_mgr.applications.keys())
+            try:
+                module_keys = list(app_manager.applications.keys())
+            except:
+                module_keys = []
+            
+            if instance_keys:
+                LOG.error(f"Instance dict has: {instance_keys}")
+            if module_keys:
+                LOG.error(f"Module dict has: {module_keys}")
+            if not instance_keys and not module_keys:
+                LOG.error("Both dicts are empty - run_apps() may not have started or failed silently")
+            
+            # Don't raise exception yet - try one more thing: wait a bit longer
+            # Sometimes apps take time to appear after instantiation logs
+            LOG.warning("Trying one more time after brief wait...")
+            time.sleep(3)
+            
+            # Final attempt
+            for key in ['controller.qos_controller', 'QoSController', 'qos_controller']:
+                if key in app_mgr.applications:
+                    controller_ref['instance'] = app_mgr.applications[key]
+                    LOG.info(f"Controller found on final attempt with key: {key}")
+                    break
+            
+            if controller_ref['instance'] is None:
+                # Last resort: raise exception
+                raise Exception("Controller initialization failed - cannot proceed without controller instance")
+        
+        # Get the controller instance
+        controller = controller_ref['instance']
         
         # Start statistics monitoring
         # This spawns a thread that periodically requests stats from switches
         controller.start_monitoring()
         
+        # Check and free port 8888 if it's already in use
+        # This prevents "Address already in use" errors from previous runs
+        self._check_and_free_port(8888)
+        
         # Initialize REST API server
         # host='0.0.0.0': listen on all network interfaces
-        # port=8080: standard port for web dashboard
-        rest_api = RESTAPI(controller, host='0.0.0.0', port=8080)
+        # port=8888: standard port for web dashboard
+        rest_api = RESTAPI(controller, host='0.0.0.0', port=8888)
         
         # Start REST API in a separate daemon thread
         # Daemon threads automatically terminate when main program exits
         rest_api.start()
         
-        # Keep controller thread alive
-        # This loop ensures the thread stays running to handle:
-        # - OpenFlow events from switches
-        # - Statistics replies
-        # - Packet-in events
+        # Give REST API time to bind to port
+        LOG.info("Waiting for REST API server to bind to port 8888...")
+        time.sleep(3)  # Give Flask time to start
+        
+        # Verify REST API is accessible
+        import requests
+        for attempt in range(10):
+            try:
+                response = requests.get('http://localhost:8888/api/v1/health', timeout=1.0)
+                if response.status_code == 200:
+                    LOG.info("REST API is ready and responding")
+                    break
+            except:
+                if attempt == 9:
+                    LOG.warning("REST API may not be ready yet, but continuing...")
+                time.sleep(0.5)
+        
+        # Give OpenFlow server time to bind to port 6653
+        LOG.info("Waiting for OpenFlow server to bind to port 6653...")
+        time.sleep(3)
+        
+        # Keep controller thread alive to handle events
+        # The REST API and controller service run in background
+        LOG.info("Controller initialized. Waiting for switches to connect...")
         try:
-            while self.running:  # Loop until running flag is False
-                time.sleep(1)   # Sleep to avoid busy-waiting (CPU efficient)
+            # Wait and periodically check for switch connections
+            connection_timeout = 60  # Wait up to 60 seconds for first connection
+            elapsed = 0
+            while self.running and elapsed < connection_timeout:
+                if len(controller.datapaths) > 0:
+                    LOG.info(f"Switches connected: {list(controller.datapaths.keys())}")
+                    break
+                time.sleep(1)
+                elapsed += 1
+            
+            if elapsed >= connection_timeout:
+                LOG.warning("No switches connected within timeout. Continuing anyway...")
+                LOG.info("Mininet switches may connect later, or check Mininet logs")
+            
+            # Keep thread alive to handle ongoing connections and events
+            while self.running:
+                time.sleep(1)
         except Exception as e:
             LOG.error(f"Controller thread error: {e}")
+            # If error occurs, keep thread alive to maintain REST API
+            while self.running:
+                time.sleep(1)
     
     def start_agent_training(self, episodes: int = 1000, save_path: str = 'models/dqn_model'):
         """
@@ -178,32 +534,44 @@ class AdaptiveQoSSystem:
         # Wait for controller REST API to be ready
         # This ensures the controller and dashboard are initialized
         import requests  # HTTP library for API calls
-        max_retries = 30  # Maximum number of retry attempts
+        max_retries = 60  # Increased to 60 seconds to match wait_for_controller
         retry_count = 0
+        
+        LOG.info("Waiting for controller REST API to be ready...")
         
         # Poll the health endpoint until controller responds
         while retry_count < max_retries:
             try:
                 # Try to connect to controller health endpoint
-                response = requests.get('http://localhost:8080/api/v1/health', timeout=2.0)
+                response = requests.get('http://localhost:8888/api/v1/health', timeout=2.0)
                 if response.status_code == 200:  # HTTP 200 = success
-                    LOG.info("Controller is ready")
+                    LOG.info("Controller REST API is ready and responding")
                     break  # Exit loop on success
-            except:
-                # If connection fails, wait and retry
-                pass
+            except requests.exceptions.ConnectionError:
+                # Connection refused - API not started yet
+                if retry_count % 10 == 0 and retry_count > 0:
+                    LOG.info(f"Still waiting for REST API... ({retry_count}/{max_retries})")
+            except Exception as e:
+                # Other errors
+                if retry_count % 10 == 0:
+                    LOG.debug(f"REST API check error: {e}")
+            
             retry_count += 1
             time.sleep(1)  # Wait 1 second between retries
         
-        # If controller never becomes ready, exit training
+        # If controller never becomes ready, exit training with error
         if retry_count >= max_retries:
-            LOG.error("Controller not available, exiting")
-            return
+            LOG.error("Controller REST API not available after 60 seconds")
+            LOG.error("Please check:")
+            LOG.error("  1. Is the controller thread running?")
+            LOG.error("  2. Is port 8888 in use by another process?")
+            LOG.error("  3. Check /tmp/adaptive_qos.log for errors")
+            raise RuntimeError("Controller REST API not available - cannot start training")
         
         # Create RL environment
         # This wraps the network controller as a Gym-compatible environment
         env = QoSEnvironment(
-            controller_api_url='http://localhost:8080',  # REST API endpoint
+            controller_api_url='http://localhost:8888',  # REST API endpoint
             state_dim=4,        # State space: [utilization, queue, delay, loss]
             action_space_size=9 # Action space: 9 different QoS configurations
         )
@@ -222,7 +590,7 @@ class AdaptiveQoSSystem:
         
         # Notify web dashboard that training is starting
         try:
-            requests.post('http://localhost:8080/api/v1/training/metrics', 
+            requests.post('http://localhost:8888/api/v1/training/metrics', 
                          json={
                              'is_training': True,      # Training status flag
                              'total_episodes': episodes # Total episodes to run
@@ -287,7 +655,7 @@ class AdaptiveQoSSystem:
             # Update web dashboard with latest metrics
             # This enables real-time visualization of training progress
             try:
-                requests.post('http://localhost:8080/api/v1/training/metrics',
+                requests.post('http://localhost:8888/api/v1/training/metrics',
                             json={
                                 'episode': episode + 1,                    # Current episode number
                                 'current_reward': float(total_reward),     # Reward this episode
@@ -314,7 +682,7 @@ class AdaptiveQoSSystem:
         
         # Mark training as complete in dashboard
         try:
-            requests.post('http://localhost:8080/api/v1/training/metrics',
+            requests.post('http://localhost:8888/api/v1/training/metrics',
                          json={'is_training': False})
         except:
             pass
@@ -344,7 +712,7 @@ class AdaptiveQoSSystem:
         
         # Create environment (same as training)
         env = QoSEnvironment(
-            controller_api_url='http://localhost:8080',
+            controller_api_url='http://localhost:8888',
             state_dim=4,
             action_space_size=9
         )
@@ -414,21 +782,80 @@ class AdaptiveQoSSystem:
         controller_thread = threading.Thread(target=self.start_controller, daemon=True)
         controller_thread.start()
         
-        # Wait for controller to initialize
-        # Gives time for REST API to start
-        time.sleep(3)
+        # Wait for controller REST API to be ready before proceeding
+        # This is critical - training will fail if REST API isn't ready
+        LOG.info("Waiting for controller REST API to be ready...")
+        import requests
+        max_wait = 60
+        api_ready = False
+        
+        for attempt in range(max_wait):
+            try:
+                response = requests.get('http://localhost:8888/api/v1/health', timeout=2.0)
+                if response.status_code == 200:
+                    LOG.info("Controller REST API is ready!")
+                    api_ready = True
+                    break
+            except:
+                if attempt % 10 == 0 and attempt > 0:
+                    LOG.info(f"Still waiting for REST API... ({attempt}/{max_wait})")
+            time.sleep(1)
+        
+        if not api_ready:
+            LOG.warning("REST API not ready after waiting, but continuing...")
+            LOG.warning("Training may fail if REST API doesn't start soon")
+        
+        # Wait a bit more for switches to connect (if Mininet is running)
+        LOG.info("Waiting for switches to connect (if Mininet is running)...")
+        time.sleep(5)
+        
+        # Verify switches are connected by checking controller state
+        for attempt in range(10):
+            try:
+                response = requests.get('http://localhost:8888/api/v1/state', timeout=2.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success'):
+                        dpids = data.get('available_dpids', [])
+                        if dpids:
+                            LOG.info(f"Switches connected: {dpids}")
+                            break
+                        elif attempt == 9:
+                            LOG.warning("No switches connected yet - Mininet may still be starting")
+            except:
+                pass
+            time.sleep(1)
         
         # Start agent based on selected mode
-        if mode == 'training':
-            self.start_agent_training(episodes=episodes)
-        elif mode == 'evaluation':
-            model_path = 'models/dqn_model_final.h5'
-            self.start_agent_evaluation(model_path, episodes=episodes)
-        else:
-            LOG.error(f"Unknown mode: {mode}")
-        
-        # Set running flag to False (signals threads to stop)
-        self.running = False
+        # These methods run synchronously (block until complete)
+        # The controller and REST API continue running in background threads
+        try:
+            if mode == 'training':
+                LOG.info(f"Starting training mode with {episodes} episodes...")
+                self.start_agent_training(episodes=episodes)
+                LOG.info("Training completed successfully")
+            elif mode == 'evaluation':
+                model_path = 'models/dqn_model_final.h5'
+                LOG.info(f"Starting evaluation mode with {episodes} episodes...")
+                self.start_agent_evaluation(model_path, episodes=episodes)
+                LOG.info("Evaluation completed successfully")
+            else:
+                LOG.error(f"Unknown mode: {mode}")
+                raise ValueError(f"Invalid mode: {mode}")
+        except KeyboardInterrupt:
+            LOG.info("Training/evaluation interrupted by user")
+            raise
+        except Exception as e:
+            LOG.error(f"Error during training/evaluation: {e}", exc_info=True)
+            raise
+        finally:
+            # Set running flag to False (signals threads to stop)
+            # This allows controller and REST API threads to exit gracefully
+            LOG.info("Shutting down system...")
+            self.running = False
+            
+            # Give threads a moment to clean up
+            time.sleep(2)
 
 
 def main():

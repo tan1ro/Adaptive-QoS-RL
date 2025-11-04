@@ -23,7 +23,7 @@ class RESTAPI:
     REST API server for controller-agent communication
     """
     
-    def __init__(self, controller, host='0.0.0.0', port=8080):
+    def __init__(self, controller, host='0.0.0.0', port=8888):
         self.controller = controller
         self.host = host
         self.port = port
@@ -64,9 +64,12 @@ class RESTAPI:
             """Get current network state"""
             try:
                 state = self.controller.get_state()
+                # Include available switch DPIDs in response
+                available_dpids = list(self.controller.datapaths.keys())
                 return jsonify({
                     'success': True,
-                    'state': state
+                    'state': state,
+                    'available_dpids': available_dpids
                 }), 200
             except Exception as e:
                 LOG.error(f"Error getting state: {e}")
@@ -180,12 +183,28 @@ class RESTAPI:
         """
         def run_server():
             LOG.info(f"Starting REST API server on {self.host}:{self.port}")
-            self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False)
+            try:
+                # Run Flask server - this blocks until stopped
+                self.app.run(host=self.host, port=self.port, debug=False, use_reloader=False, threaded=True)
+            except Exception as e:
+                LOG.error(f"REST API server error: {e}")
+                import traceback
+                LOG.error(traceback.format_exc())
 
+        # Ensure routes are set up before starting
+        if not hasattr(self.app, 'url_map') or len(self.app.url_map._rules) == 0:
+            LOG.warning("Routes not set up, setting up now...")
+            self.setup_routes()
+        
         self.server_thread = threading.Thread(target=run_server)
         self.server_thread.daemon = True
         self.server_thread.start()
-        LOG.info("REST API server started")
+        
+        # Give Flask a moment to bind to the port
+        import time
+        time.sleep(2)
+        
+        LOG.info(f"REST API server thread started (should be listening on {self.host}:{self.port})")
 
     def stop(self):
         """

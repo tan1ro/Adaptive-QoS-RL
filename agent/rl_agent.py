@@ -71,13 +71,14 @@ class DQNAgent:
         Returns:
             Keras model
         """
-        model = keras.Sequential([
-            layers.Dense(64, activation='relu', input_shape=(self.state_size,)),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(64, activation='relu'),
-            layers.Dense(self.action_size, activation='linear')
-        ])
+        # Use Input layer instead of input_shape to avoid deprecation warnings
+        inputs = layers.Input(shape=(self.state_size,))
+        x = layers.Dense(64, activation='relu')(inputs)
+        x = layers.Dense(64, activation='relu')(x)
+        x = layers.Dense(64, activation='relu')(x)
+        outputs = layers.Dense(self.action_size, activation='linear')(x)
         
+        model = keras.Model(inputs=inputs, outputs=outputs)
         model.compile(
             optimizer=keras.optimizers.Adam(learning_rate=self.learning_rate),
             loss='mse'

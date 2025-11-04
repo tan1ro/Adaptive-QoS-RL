@@ -23,7 +23,7 @@ class QoSEnvironment(gym.Env):
     
     metadata = {'render.modes': ['human']}
     
-    def __init__(self, controller_api_url: str = 'http://localhost:8080',
+    def __init__(self, controller_api_url: str = 'http://localhost:8888',
                  state_dim: int = 4, action_space_size: int = 9):
         """
         Initialize environment
@@ -167,12 +167,29 @@ class QoSEnvironment(gym.Env):
             True if successful, False otherwise
         """
         try:
+            # Get available switches from controller
+            # First try to get available DPIDs from state endpoint
+            dpid = 1  # Default fallback
+            try:
+                response = requests.get(f'{self.controller_api_url}/api/v1/state', timeout=1.0)
+                if response.status_code == 200:
+                    data = response.json()
+                    if data.get('success') and 'available_dpids' in data:
+                        dpids = data.get('available_dpids', [])
+                        if dpids:
+                            # Convert to native Python int to prevent JSON serialization issues
+                            dpid = int(dpids[0])  # Use first available switch
+            except:
+                pass  # Use default if fetch fails
+            
+            # Convert all values to native Python types to ensure JSON serialization
+            # This prevents "Object of type int64 is not JSON serializable" errors
             payload = {
-                'dpid': 1,  # Default datapath ID
-                'queue_id': qos_params['queue_id'],
-                'min_rate': qos_params['min_rate'],
-                'max_rate': qos_params['max_rate'],
-                'priority': qos_params['priority']
+                'dpid': int(dpid),  # Convert to native Python int
+                'queue_id': int(qos_params['queue_id']),
+                'min_rate': int(qos_params['min_rate']),
+                'max_rate': int(qos_params['max_rate']),
+                'priority': int(qos_params['priority'])
             }
             
             response = requests.post(

@@ -16,7 +16,7 @@
 
 // Base URL for all API endpoints
 // All API calls will be prefixed with this URL
-const API_BASE = 'http://localhost:8080/api/v1';
+const API_BASE = 'http://localhost:8888/api/v1';
 
 // Update interval in milliseconds
 // Dashboard will refresh data every second (1000ms)
